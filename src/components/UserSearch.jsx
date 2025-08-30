@@ -1,8 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import { AlertCircle, BarChart, Calendar, ChevronDown, Database, Search, User, Users } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
-import { Search, User, Calendar, AlertCircle, Users, BarChart, ChevronDown, Database } from 'lucide-react';
 import BatchEvaluationProcessor from './BatchEvaluationProcessor';
-import { fetchStageData } from '../lib/databaseService';
 
 const UserSearch = ({ onUserSelect, selectedUser }) => {
   const [searchTerm, setSearchTerm] = useState('');
@@ -176,73 +175,168 @@ const UserSearch = ({ onUserSelect, selectedUser }) => {
     try {
       console.log('Loading all users who need evaluation from database...');
       
-      // First, get all users from level2_screen3_progress
-      const { data: allUsers, error: usersError } = await supabase
+      // First, get the total count of users in level2_screen3_progress
+      const { count: totalUsersCount, error: countError } = await supabase
         .from('level2_screen3_progress')
-        .select(`
-          id,
-          user_id,
-          email,
-          start_id,
-          case_id,
-          selected_case_id,
-          current_stage,
-          progress_percentage,
-          is_completed,
-          created_at,
-          updated_at,
-          idea_statement,
-          stage2_problem,
-          stage3_technology,
-          stage4_collaboration,
-          stage5_creativity,
-          stage6_speed_scale,
-          stage7_impact,
-          stage8_final_problem,
-          stage8_final_technology,
-          stage8_final_collaboration,
-          stage8_final_creativity,
-          stage8_final_speed_scale,
-          stage8_final_impact,
-          stage10_reflection
-        `)
-        .order('updated_at', { ascending: false });
+        .select('*', { count: 'exact', head: true });
 
-      if (usersError) {
-        console.error('Failed to fetch users:', usersError);
-        throw new Error(usersError.message);
+      if (countError) {
+        console.error('Failed to get user count:', countError);
+        throw new Error(countError.message);
       }
+
+      console.log(`Total users in database: ${totalUsersCount}`);
+
+      // Fetch all users using pagination to handle large datasets
+      let allUsers = [];
+      let fromIndex = 0;
+      const pageSize = 1000; // Supabase default limit
+      let hasMoreData = true;
+      let pageCount = 0;
+
+      while (hasMoreData) {
+        pageCount++;
+        console.log(`Fetching users page ${pageCount} (records ${fromIndex + 1} to ${fromIndex + pageSize})...`);
+        
+        const { data: usersPage, error: usersError } = await supabase
+          .from('level2_screen3_progress')
+          .select(`
+            id,
+            user_id,
+            email,
+            start_id,
+            case_id,
+            selected_case_id,
+            current_stage,
+            progress_percentage,
+            is_completed,
+            created_at,
+            updated_at,
+            idea_statement,
+            stage2_problem,
+            stage3_technology,
+            stage4_collaboration,
+            stage5_creativity,
+            stage6_speed_scale,
+            stage7_impact,
+            stage8_final_problem,
+            stage8_final_technology,
+            stage8_final_collaboration,
+            stage8_final_creativity,
+            stage8_final_speed_scale,
+            stage8_final_impact,
+            stage10_reflection
+          `)
+          .range(fromIndex, fromIndex + pageSize - 1)
+          .order('updated_at', { ascending: false });
+
+        if (usersError) {
+          console.error('Failed to fetch users page:', usersError);
+          throw new Error(usersError.message);
+        }
+
+        if (usersPage && usersPage.length > 0) {
+          allUsers = [...allUsers, ...usersPage];
+          console.log(`Fetched ${usersPage.length} users in page ${pageCount}. Total so far: ${allUsers.length}`);
+          
+          // Check if we got fewer records than requested, meaning we're done
+          if (usersPage.length < pageSize) {
+            hasMoreData = false;
+          } else {
+            fromIndex += pageSize;
+          }
+        } else {
+          hasMoreData = false;
+        }
+      }
+
+      console.log(`Completed fetching all users: ${allUsers.length} users in ${pageCount} pages`);
 
       if (!allUsers || allUsers.length === 0) {
         setError('No users found in the database.');
         return;
       }
 
-      console.log(`Found ${allUsers.length} total users in database`);
-
-      // Then, get all emails with successful evaluations
-      const { data: successfulEvaluations, error: evalError } = await supabase
-        .from('evaluation_results')
-        .select('email')
-        .eq('evaluation_status', 'success');
-
-      if (evalError) {
-        console.warn('Warning: Failed to fetch evaluation status:', evalError.message);
-        // Continue processing even if we can't check evaluation status
+      if (totalUsersCount !== allUsers.length) {
+        console.warn(`Warning: Expected ${totalUsersCount} users but fetched ${allUsers.length} users`);
       }
 
-      const completedEmails = (successfulEvaluations || []).map(record => record.email);
-      console.log(`Users with successful evaluations to skip: ${completedEmails.length}`);
+      console.log(`Found ${allUsers.length} total users in database`);
 
-      // Filter out users who already have successful evaluations
+      // Then, get all emails from evaluation_results table with successful status only
+      // Users should be excluded only if they have 'success' status in evaluation_results
+      console.log('Fetching emails with successful evaluations from evaluation_results table...');
+      
+      // Get total count of evaluation results first
+      const { count: evalCount, error: evalCountError } = await supabase
+        .from('evaluation_results')
+        .select('*', { count: 'exact', head: true })
+        .eq('evaluation_status', 'success');
+
+      if (evalCountError) {
+        console.warn('Warning: Failed to get successful evaluation results count:', evalCountError.message);
+      } else {
+        console.log(`Total successful records in evaluation_results: ${evalCount}`);
+      }
+
+      // Fetch all successful evaluation results using pagination if needed
+      let allSuccessfulEvaluations = [];
+      let evalFromIndex = 0;
+      const evalPageSize = 1000;
+      let hasMoreEvalData = true;
+      let evalPageCount = 0;
+
+      while (hasMoreEvalData) {
+        evalPageCount++;
+        console.log(`Fetching successful evaluation results page ${evalPageCount} (records ${evalFromIndex + 1} to ${evalFromIndex + evalPageSize})...`);
+        
+        const { data: evalPage, error: evalError } = await supabase
+          .from('evaluation_results')
+          .select('email')
+          .eq('evaluation_status', 'success')
+          .range(evalFromIndex, evalFromIndex + evalPageSize - 1)
+          .order('id', { ascending: true });
+
+        if (evalError) {
+          console.warn('Warning: Failed to fetch successful evaluation results page:', evalError.message);
+          break; // Continue processing even if we can't check evaluation status
+        }
+
+        if (evalPage && evalPage.length > 0) {
+          allSuccessfulEvaluations = [...allSuccessfulEvaluations, ...evalPage];
+          console.log(`Fetched ${evalPage.length} successful evaluation results in page ${evalPageCount}. Total so far: ${allSuccessfulEvaluations.length}`);
+          
+          if (evalPage.length < evalPageSize) {
+            hasMoreEvalData = false;
+          } else {
+            evalFromIndex += evalPageSize;
+          }
+        } else {
+          hasMoreEvalData = false;
+        }
+      }
+
+      console.log(`Completed fetching successful evaluation results: ${allSuccessfulEvaluations.length} records in ${evalPageCount} pages`);
+
+      // Create a Set of emails with successful evaluations only
+      const successfulEmails = new Set(
+        allSuccessfulEvaluations.map(record => record.email.toLowerCase().trim())
+      );
+      console.log(`Users with successful evaluations to skip: ${successfulEmails.size}`);
+      console.log('Sample of emails with successful evaluations:', Array.from(successfulEmails).slice(0, 5));
+
+      // Filter to include:
+      // 1. Users not in evaluation_results at all
+      // 2. Users in evaluation_results but without 'success' status
       const usersNeedingEvaluation = allUsers.filter(user => {
-        const hasSuccessfulEvaluation = completedEmails.includes(user.email);
+        const normalizedEmail = user.email.toLowerCase().trim();
+        const hasSuccessfulEvaluation = successfulEmails.has(normalizedEmail);
         
         if (hasSuccessfulEvaluation) {
           console.log(`Skipping ${user.email} - already has successful evaluation`);
           return false;
         } else {
-          console.log(`Including ${user.email} - needs evaluation`);
+          console.log(`Including ${user.email} - either not in evaluation_results or has non-success status, needs evaluation`);
           return true;
         }
       });
